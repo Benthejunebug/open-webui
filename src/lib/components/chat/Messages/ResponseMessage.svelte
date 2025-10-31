@@ -319,12 +319,27 @@
                         let noteTitle = '';
 
                         if (titleModelId) {
-                                const generatedTitle = await generateTitle(localStorage.token, titleModelId, [
-                                        { role: 'assistant', content: markdownContent }
-                                ]).catch((error) => {
-                                        console.error(error);
-                                        return null;
-                                });
+                                const titleMessages = createMessagesList(history, message.id)
+                                        .filter((chatMessage) =>
+                                                ['system', 'user', 'assistant'].includes(chatMessage?.role)
+                                        )
+                                        .map((chatMessage) => ({
+                                                role: chatMessage.role,
+                                                content: removeAllDetails(chatMessage?.content ?? '')
+                                        }));
+
+                                const generatedTitle =
+                                        titleMessages.length > 0
+                                                ? await generateTitle(
+                                                          localStorage.token,
+                                                          titleModelId,
+                                                          titleMessages,
+                                                          chatId
+                                                  ).catch((error) => {
+                                                          console.error(error);
+                                                          return null;
+                                                  })
+                                                : null;
 
                                 if (generatedTitle) {
                                         noteTitle = generatedTitle;
