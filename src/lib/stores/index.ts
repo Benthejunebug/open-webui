@@ -186,8 +186,9 @@ type Settings = {
 	notificationEnabled?: boolean;
 	highContrastMode?: boolean;
 	title?: TitleSettings;
-	showChatTitleInTab?: boolean;
-	splitLargeDeltas?: boolean;
+        showChatTitleInTab?: boolean;
+        showSaveResponseToNotesButton?: boolean;
+        splitLargeDeltas?: boolean;
 	chatDirection?: 'LTR' | 'RTL' | 'auto';
 	ctrlEnterToSend?: boolean;
 

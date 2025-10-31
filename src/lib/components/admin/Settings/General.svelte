@@ -655,18 +655,26 @@
 						<Switch bind:state={adminConfig.ENABLE_MESSAGE_RATING} />
 					</div>
 
-					<div class="mb-2.5 flex w-full items-center justify-between pr-2">
-						<div class=" self-center text-xs font-medium">
-							{$i18n.t('Notes')} ({$i18n.t('Beta')})
-						</div>
+                                        <div class="mb-2.5 flex w-full items-center justify-between pr-2">
+                                                <div class=" self-center text-xs font-medium">
+                                                        {$i18n.t('Notes')} ({$i18n.t('Beta')})
+                                                </div>
 
-						<Switch bind:state={adminConfig.ENABLE_NOTES} />
-					</div>
+                                                <Switch bind:state={adminConfig.ENABLE_NOTES} />
+                                        </div>
 
-					<div class="mb-2.5 flex w-full items-center justify-between pr-2">
-						<div class=" self-center text-xs font-medium">
-							{$i18n.t('Channels')} ({$i18n.t('Beta')})
-						</div>
+                                        <div class="mb-2.5 flex w-full items-center justify-between pr-2">
+                                                <div class=" self-center text-xs font-medium">
+                                                        {$i18n.t('Enable "Save to Notes" Button')}
+                                                </div>
+
+                                                <Switch bind:state={adminConfig.ENABLE_SAVE_RESPONSE_TO_NOTES} />
+                                        </div>
+
+                                        <div class="mb-2.5 flex w-full items-center justify-between pr-2">
+                                                <div class=" self-center text-xs font-medium">
+                                                        {$i18n.t('Channels')} ({$i18n.t('Beta')})
+                                                </div>
 
 						<Switch bind:state={adminConfig.ENABLE_CHANNELS} />
 					</div>
