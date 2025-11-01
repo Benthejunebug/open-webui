@@ -78,7 +78,9 @@
 		};
 		done: boolean;
 		error?: boolean | { content: string };
-		sources?: string[];
+                sources?: any[];
+                citations?: any[];
+                noteContent?: string;
 		code_executions?: {
 			uuid: string;
 			name: string;
@@ -151,24 +153,6 @@
         $: model = $models.find((m) => m.id === message.model);
 
         $: citationSources = extractCitationSources(message?.sources ?? message?.citations ?? []);
-
-        $: noteContent = injectCitationLinks(
-                sanitizeResponseContent(message?.content ?? ''),
-                citationSources
-        );
-
-        $: if (history?.messages?.[messageId]) {
-                const currentMessage = history.messages[messageId];
-
-                const existingCitations = currentMessage?.citations ?? [];
-                if (JSON.stringify(existingCitations) !== JSON.stringify(citationSources)) {
-                        history.messages[messageId].citations = citationSources;
-                }
-
-                if (currentMessage?.noteContent !== noteContent) {
-                        history.messages[messageId].noteContent = noteContent;
-                }
-        }
 
 	let edit = false;
 	let editedContent = '';
@@ -331,7 +315,31 @@
         };
 
         let citationSources: any[] = [];
-        let noteContent = '';
+
+        const buildCitationMetadata = (baseMessage: Partial<MessageType>) => {
+                const sources = extractCitationSources(baseMessage?.sources ?? baseMessage?.citations ?? []);
+
+                const contentWithLinks = injectCitationLinks(
+                        sanitizeResponseContent(baseMessage?.content ?? ''),
+                        sources
+                );
+
+                return {
+                        citations: sources,
+                        noteContent: contentWithLinks
+                };
+        };
+
+        const persistMessage = (messageId: string, updatedMessage: Partial<MessageType>) => {
+                const baseMessage = updatedMessage ?? history?.messages?.[messageId] ?? {};
+
+                const normalizedMessage = {
+                        ...baseMessage,
+                        ...buildCitationMetadata(baseMessage)
+                };
+
+                saveMessage(messageId, normalizedMessage);
+        };
 
         const copyToClipboard = async (text) => {
                 text = removeAllDetails(text);
@@ -600,10 +608,10 @@
 				url: `${image.url}`
 			}));
 
-			saveMessage(message.id, {
-				...message,
-				files: files
-			});
+                        persistMessage(message.id, {
+                                ...message,
+                                files: files
+                        });
 		}
 
 		generatingImage = false;
@@ -693,7 +701,7 @@
 		}
 
 		console.log(updatedMessage);
-		saveMessage(message.id, updatedMessage);
+                persistMessage(message.id, updatedMessage);
 
 		await tick();
 
@@ -714,7 +722,7 @@
 					updatedMessage.annotation.tags = tags;
 					feedbackItem.data.tags = tags;
 
-					saveMessage(message.id, updatedMessage);
+                                    persistMessage(message.id, updatedMessage);
 					await updateFeedbackById(
 						localStorage.token,
 						updatedMessage.feedbackId,
@@ -958,13 +966,18 @@
 										onAddMessages={({ modelId, parentId, messages }) => {
 											addMessages({ modelId, parentId, messages });
 										}}
-										onSave={({ raw, oldContent, newContent }) => {
-											history.messages[message.id].content = history.messages[
-												message.id
-											].content.replace(raw, raw.replace(oldContent, newContent));
+                                                                                onSave={({ raw, oldContent, newContent }) => {
+                                                                                        const currentMessage = history.messages[message.id];
+                                                                                        const updatedContent = currentMessage.content.replace(
+                                                                                                raw,
+                                                                                                raw.replace(oldContent, newContent)
+                                                                                        );
 
-											updateChat();
-										}}
+                                                                                        persistMessage(message.id, {
+                                                                                                ...currentMessage,
+                                                                                                content: updatedContent
+                                                                                        });
+                                                                                }}
 									/>
 								{/if}
 
