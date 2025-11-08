@@ -266,7 +266,7 @@
 
 <FilesOverlay show={dragged} />
 
-<div id="notes-container" class="w-full min-h-full h-full">
+<div id="notes-container" class="w-full">
 	{#if loaded}
 		<DeleteConfirmDialog
 			bind:show={showDeleteConfirm}
