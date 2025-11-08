@@ -163,6 +163,7 @@
         let model = null;
         $: model = $models.find((m) => m.id === message.model);
 
+        let citationSources: any[] = [];
         $: citationSources = extractCitationSources(message?.sources ?? message?.citations ?? []);
 
 	let edit = false;
@@ -178,6 +179,8 @@
         let generatingImage = false;
 
         let showRateComment = false;
+        let savingToNotes = false;
+        let canSaveResponseToNotes = false;
 
         const isHttpUrl = (value?: string) => {
                 if (!value) return false;
@@ -185,24 +188,14 @@
         };
 
         const decodeValue = (value?: string) => {
-                if (!value) return value ?? '';
-	let loadingSpeech = false;
-	let generatingImage = false;
-
-        let showRateComment = false;
-        let savingToNotes = false;
-        let canSaveResponseToNotes = false;
-
-        const copyToClipboard = async (text) => {
-                text = removeAllDetails(text);
-
-                if (($config?.ui?.response_watermark ?? '').trim() !== '') {
-                        text = `${text}\n\n${$config?.ui?.response_watermark}`;
+                if (!value) {
+                        return value ?? '';
                 }
 
-                const res = await _copyToClipboard(text, null, $settings?.copyFormatted ?? false);
-                if (res) {
-                        toast.success($i18n.t('Copying to clipboard was successful!'));
+                try {
+                        return decodeURIComponent(value);
+                } catch (error) {
+                        return value ?? '';
                 }
         };
 
@@ -215,6 +208,19 @@
                         return decodeURIComponent(value);
                 } catch (error) {
                         return value;
+                }
+        };
+
+        const copyToClipboard = async (text) => {
+                text = removeAllDetails(text);
+
+                if (($config?.ui?.response_watermark ?? '').trim() !== '') {
+                        text = `${text}\n\n${$config?.ui?.response_watermark}`;
+                }
+
+                const res = await _copyToClipboard(text, null, $settings?.copyFormatted ?? false);
+                if (res) {
+                        toast.success($i18n.t('Copying to clipboard was successful!'));
                 }
         };
 
@@ -348,8 +354,6 @@
                 });
         };
 
-        let citationSources: any[] = [];
-
         const buildCitationMetadata = (baseMessage: Partial<MessageType>) => {
                 const sources = extractCitationSources(baseMessage?.sources ?? baseMessage?.citations ?? []);
 
@@ -373,93 +377,6 @@
                 };
 
                 saveMessage(messageId, normalizedMessage);
-        };
-
-        const copyToClipboard = async (text) => {
-                text = removeAllDetails(text);
-
-		if (($config?.ui?.response_watermark ?? '').trim() !== '') {
-			text = `${text}\n\n${$config?.ui?.response_watermark}`;
-		}
-
-		const res = await _copyToClipboard(text, null, $settings?.copyFormatted ?? false);
-		if (res) {
-			toast.success($i18n.t('Copying to clipboard was successful!'));
-		}
-	};
-
-	const playAudio = (idx: number) => {
-		return new Promise<void>((res) => {
-			speakingIdx = idx;
-			const audio = audioParts[idx];
-                const acc: { id: string; title: string; url?: string }[] = [];
-
-                if (!Array.isArray(sources)) {
-                        return acc;
-                }
-
-                for (const source of sources) {
-                        if (!source || typeof source !== 'object') {
-                                continue;
-                        }
-
-                        const documents = Array.isArray(source?.document) ? source.document : [];
-
-                        for (let index = 0; index < documents.length; index += 1) {
-                                const metadataCollection = source?.metadata;
-                                const metadata = Array.isArray(metadataCollection)
-                                        ? metadataCollection[index]
-                                        : metadataCollection?.[index];
-
-                                let id = metadata?.source ?? source?.source?.id ?? `source-${acc.length + 1}`;
-
-                                let url =
-                                        metadata?.url ??
-                                        source?.source?.url ??
-                                        (typeof metadata?.source === 'string' &&
-                                        (metadata.source.startsWith('http://') || metadata.source.startsWith('https://'))
-                                                ? metadata.source
-                                                : undefined);
-
-                                if (typeof id === 'string' && (id.startsWith('http://') || id.startsWith('https://'))) {
-                                        url = id;
-                                }
-
-                                const name =
-                                        metadata?.name ??
-                                        source?.source?.name ??
-                                        (typeof url === 'string' ? url : `Source ${acc.length + 1}`);
-
-                                if (!acc.some((item) => item.id === id)) {
-                                        acc.push({
-                                                id: String(id),
-                                                title: decodeCitationName(String(name)),
-                                                url: typeof url === 'string' ? url : undefined
-                                        });
-                                }
-                        }
-                }
-
-                return acc;
-        };
-
-        const injectCitationLinks = (content: string, citations: { title: string; url?: string }[]) => {
-                if (typeof content !== 'string' || !citations?.length) {
-                        return content;
-                }
-
-                return content.replace(/\[(\d+)\]/g, (match, group) => {
-                        const citation = citations[Number(group) - 1];
-                        if (!citation) {
-                                return match;
-                        }
-
-                        if (citation.url) {
-                                return `[${citation.title}](${citation.url})`;
-                        }
-
-                        return citation.title;
-                });
         };
 
         const fallbackTitleFromContent = (content: string) => {
@@ -585,36 +502,22 @@
                         speakingIdx = idx;
                         const audio = audioParts[idx];
 
-			if (!audio) {
-				return res();
-			}
+                        if (!audio) {
+                                return res();
+                        }
 
-			audio.play();
-			audio.onended = async () => {
-				await new Promise((r) => setTimeout(r, 300));
+                        audio.play();
+                        audio.onended = async () => {
+                                await new Promise((r) => setTimeout(r, 300));
 
-				if (Object.keys(audioParts).length - 1 === idx) {
-					speaking = false;
-				}
+                                if (Object.keys(audioParts).length - 1 === idx) {
+                                        speaking = false;
+                                }
 
-				res();
-			};
-		});
-	};
-	let showRateComment = false;
-
-	const copyToClipboard = async (text) => {
-		text = removeAllDetails(text);
-
-		if (($config?.ui?.response_watermark ?? '').trim() !== '') {
-			text = `${text}\n\n${$config?.ui?.response_watermark}`;
-		}
-
-		const res = await _copyToClipboard(text, null, $settings?.copyFormatted ?? false);
-		if (res) {
-			toast.success($i18n.t('Copying to clipboard was successful!'));
-		}
-	};
+                                res();
+                        };
+                });
+        };
 
 	const stopAudio = () => {
 		try {
