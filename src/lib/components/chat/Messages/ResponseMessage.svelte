@@ -16,7 +16,15 @@
         import { generateTags, generateTitle } from '$lib/apis';
         import { createNewNote } from '$lib/apis/notes';
 
-	import { config, models, settings, temporaryChatEnabled, TTSWorker, user } from '$lib/stores';
+	import {
+		audioQueue,
+		config,
+		models,
+		settings,
+		temporaryChatEnabled,
+		TTSWorker,
+		user
+	} from '$lib/stores';
 	import { synthesizeOpenAISpeech } from '$lib/apis/audio';
 	import { imageGenerations } from '$lib/apis/images';
         import {
@@ -159,7 +167,6 @@
 
 	let messageIndexEdit = false;
 
-	let audioParts: Record<number, HTMLAudioElement | null> = {};
 	let speaking = false;
 	let speakingIdx: number | undefined;
 
@@ -405,30 +412,40 @@
 			};
 		});
 	};
+	let showRateComment = false;
 
-	const toggleSpeakMessage = async () => {
-		if (speaking) {
-			try {
-				speechSynthesis.cancel();
+	const copyToClipboard = async (text) => {
+		text = removeAllDetails(text);
 
-				if (speakingIdx !== undefined && audioParts[speakingIdx]) {
-					audioParts[speakingIdx]!.pause();
-					audioParts[speakingIdx]!.currentTime = 0;
-				}
-			} catch {}
-
-			speaking = false;
-			speakingIdx = undefined;
-			return;
+		if (($config?.ui?.response_watermark ?? '').trim() !== '') {
+			text = `${text}\n\n${$config?.ui?.response_watermark}`;
 		}
 
+		const res = await _copyToClipboard(text, null, $settings?.copyFormatted ?? false);
+		if (res) {
+			toast.success($i18n.t('Copying to clipboard was successful!'));
+		}
+	};
+
+	const stopAudio = () => {
+		try {
+			speechSynthesis.cancel();
+			$audioQueue.stop();
+		} catch {}
+
+		if (speaking) {
+			speaking = false;
+			speakingIdx = undefined;
+		}
+	};
+
+	const speak = async () => {
 		if (!(message?.content ?? '').trim().length) {
 			toast.info($i18n.t('No content to speak'));
 			return;
 		}
 
 		speaking = true;
-
 		const content = removeAllDetails(message.content);
 
 		if ($config.audio.tts.engine === '') {
@@ -447,12 +464,12 @@
 
 					console.log(voice);
 
-					const speak = new SpeechSynthesisUtterance(content);
-					speak.rate = $settings.audio?.tts?.playbackRate ?? 1;
+					const speech = new SpeechSynthesisUtterance(content);
+					speech.rate = $settings.audio?.tts?.playbackRate ?? 1;
 
-					console.log(speak);
+					console.log(speech);
 
-					speak.onend = () => {
+					speech.onend = () => {
 						speaking = false;
 						if ($settings.conversationMode) {
 							document.getElementById('voice-input-button')?.click();
@@ -460,15 +477,21 @@
 					};
 
 					if (voice) {
-						speak.voice = voice;
+						speech.voice = voice;
 					}
 
-					speechSynthesis.speak(speak);
+					speechSynthesis.speak(speech);
 				}
 			}, 100);
 		} else {
-			loadingSpeech = true;
+			$audioQueue.setId(`${message.id}`);
+			$audioQueue.setPlaybackRate($settings.audio?.tts?.playbackRate ?? 1);
+			$audioQueue.onStopped = () => {
+				speaking = false;
+				speakingIdx = undefined;
+			};
 
+			loadingSpeech = true;
 			const messageContentParts: string[] = getMessageContentParts(
 				content,
 				$config?.audio?.tts?.split_on ?? 'punctuation'
@@ -484,17 +507,6 @@
 			}
 
 			console.debug('Prepared message content for TTS', messageContentParts);
-
-			audioParts = messageContentParts.reduce(
-				(acc, _sentence, idx) => {
-					acc[idx] = null;
-					return acc;
-				},
-				{} as typeof audioParts
-			);
-
-			let lastPlayedAudioPromise = Promise.resolve(); // Initialize a promise that resolves immediately
-
 			if ($settings.audio?.tts?.engine === 'browser-kokoro') {
 				if (!$TTSWorker) {
 					await TTSWorker.set(
@@ -521,12 +533,9 @@
 						});
 
 					if (blob) {
-						const audio = new Audio(blob);
-						audio.playbackRate = $settings.audio?.tts?.playbackRate ?? 1;
-
-						audioParts[idx] = audio;
+						const url = URL.createObjectURL(blob);
+						$audioQueue.enqueue(url);
 						loadingSpeech = false;
-						lastPlayedAudioPromise = lastPlayedAudioPromise.then(() => playAudio(idx));
 					}
 				}
 			} else {
@@ -547,13 +556,10 @@
 
 					if (res) {
 						const blob = await res.blob();
-						const blobUrl = URL.createObjectURL(blob);
-						const audio = new Audio(blobUrl);
-						audio.playbackRate = $settings.audio?.tts?.playbackRate ?? 1;
+						const url = URL.createObjectURL(blob);
 
-						audioParts[idx] = audio;
+						$audioQueue.enqueue(url);
 						loadingSpeech = false;
-						lastPlayedAudioPromise = lastPlayedAudioPromise.then(() => playAudio(idx));
 					}
 				}
 			}
@@ -826,7 +832,7 @@
 		<div class="flex-auto w-0 pl-1 relative">
 			<Name>
 				<Tooltip content={model?.name ?? message.model} placement="top-start">
-					<span class="line-clamp-1 text-black dark:text-white">
+					<span id="response-message-model-name" class="line-clamp-1 text-black dark:text-white">
 						{model?.name ?? message.model}
 					</span>
 				</Tooltip>
@@ -854,10 +860,7 @@
 				<div class="chat-{message.role} w-full min-w-full markdown-prose">
 					<div>
 						{#if model?.info?.meta?.capabilities?.status_updates ?? true}
-							<StatusHistory
-								statusHistory={message?.statusHistory}
-								expand={message?.content === ''}
-							/>
+							<StatusHistory statusHistory={message?.statusHistory} />
 						{/if}
 
 						{#if message?.files && message.files?.filter((f) => f.type === 'image').length > 0}
@@ -1241,7 +1244,11 @@
 												: 'invisible group-hover:visible'} p-1.5 hover:bg-black/5 dark:hover:bg-white/5 rounded-lg dark:hover:text-white hover:text-black transition"
 											on:click={() => {
 												if (!loadingSpeech) {
-													toggleSpeakMessage();
+													if (speaking) {
+														stopAudio();
+													} else {
+														speak();
+													}
 												}
 											}}
 										>
