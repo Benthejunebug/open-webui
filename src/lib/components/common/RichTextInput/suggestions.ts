@@ -1,5 +1,4 @@
-import { mount, unmount } from 'svelte';
-import { createClassComponent } from 'svelte/legacy';
+import { mount } from 'svelte';
 
 import tippy from 'tippy.js';
 
@@ -18,19 +17,18 @@ export function getSuggestionRenderer(Component: any, ComponentProps = {}) {
 				document.body.appendChild(container);
 
 				// mount Svelte component
-				component = createClassComponent({
-					component: Component,
-					target: container,
-					props: {
-						char: props?.text,
-						query: props?.query,
-						command: (item) => {
-							props.command({ id: item.id, label: item.label });
-						},
-						...ComponentProps
-					},
-					context: new Map<string, any>([['i18n', ComponentProps?.i18n]])
-				});
+                                component = mount(Component, {
+                                        target: container,
+                                        props: {
+                                                char: props?.text,
+                                                query: props?.query,
+                                                command: (item) => {
+                                                        props.command({ id: item.id, label: item.label });
+                                                },
+                                                ...ComponentProps
+                                        },
+                                        context: new Map<string, any>([['i18n', ComponentProps?.i18n]])
+                                });
 
 				// Create a tiny reference element so outside taps are truly "outside"
 				refEl = document.createElement('div');
