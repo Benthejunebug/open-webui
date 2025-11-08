@@ -68,7 +68,8 @@
 	let expandDetails = false;
 	let showChatTitleInTab = true;
 
-	let showFloatingActionButtons = true;
+        let showFloatingActionButtons = true;
+        let showSaveResponseToNotesButton = true;
 	let floatingActionButtons = null;
 
 	let imageCompression = false;
@@ -193,11 +194,12 @@
 		showUpdateToast = $settings?.showUpdateToast ?? true;
 		showChangelog = $settings?.showChangelog ?? true;
 
-		showEmojiInCall = $settings?.showEmojiInCall ?? false;
-		voiceInterruption = $settings?.voiceInterruption ?? false;
+                showEmojiInCall = $settings?.showEmojiInCall ?? false;
+                voiceInterruption = $settings?.voiceInterruption ?? false;
 
-		displayMultiModelResponsesInTabs = $settings?.displayMultiModelResponsesInTabs ?? false;
-		chatFadeStreamingText = $settings?.chatFadeStreamingText ?? true;
+                displayMultiModelResponsesInTabs = $settings?.displayMultiModelResponsesInTabs ?? false;
+                chatFadeStreamingText = $settings?.chatFadeStreamingText ?? true;
+                showSaveResponseToNotesButton = $settings?.showSaveResponseToNotesButton ?? true;
 
 		richTextInput = $settings?.richTextInput ?? true;
 		showFormattingToolbar = $settings?.showFormattingToolbar ?? false;
@@ -882,29 +884,50 @@
 				</div>
 			</div>
 
-			<div>
-				<div class=" py-0.5 flex w-full justify-between">
-					<div id="stylized-pdf-export-label" class=" self-center text-xs">
-						{$i18n.t('Stylized PDF Export')}
-					</div>
+                        <div>
+                                <div class=" py-0.5 flex w-full justify-between">
+                                        <div id="stylized-pdf-export-label" class=" self-center text-xs">
+                                                {$i18n.t('Stylized PDF Export')}
+                                        </div>
 
-					<div class="flex items-center gap-2 p-1">
-						<Switch
-							ariaLabelledbyId="stylized-pdf-export-label"
-							tooltip={true}
-							bind:state={stylizedPdfExport}
-							on:change={() => {
-								saveSettings({ stylizedPdfExport });
-							}}
-						/>
-					</div>
-				</div>
-			</div>
+                                        <div class="flex items-center gap-2 p-1">
+                                                <Switch
+                                                        ariaLabelledbyId="stylized-pdf-export-label"
+                                                        tooltip={true}
+                                                        bind:state={stylizedPdfExport}
+                                                        on:change={() => {
+                                                                saveSettings({ stylizedPdfExport });
+                                                        }}
+                                                />
+                                        </div>
+                                </div>
+                        </div>
 
-			<div>
-				<div class=" py-0.5 flex w-full justify-between">
-					<label id="floating-action-buttons-label" class=" self-center text-xs">
-						{$i18n.t('Floating Quick Actions')}
+                        {#if ($config?.features?.enable_notes ?? false) && ($config?.features?.enable_save_response_to_notes ?? false)}
+                                <div>
+                                        <div class=" py-0.5 flex w-full justify-between">
+                                                <div id="save-response-to-notes-label" class=" self-center text-xs">
+                                                        {$i18n.t('Show "Save to Notes" Button')}
+                                                </div>
+
+                                                <div class="flex items-center gap-2 p-1">
+                                                        <Switch
+                                                                ariaLabelledbyId="save-response-to-notes-label"
+                                                                tooltip={true}
+                                                                bind:state={showSaveResponseToNotesButton}
+                                                                on:change={() => {
+                                                                        saveSettings({ showSaveResponseToNotesButton });
+                                                                }}
+                                                        />
+                                                </div>
+                                        </div>
+                                </div>
+                        {/if}
+
+                        <div>
+                                <div class=" py-0.5 flex w-full justify-between">
+                                        <label id="floating-action-buttons-label" class=" self-center text-xs">
+                                                {$i18n.t('Floating Quick Actions')}
 					</label>
 
 					<div class="flex items-center gap-3 p-1">

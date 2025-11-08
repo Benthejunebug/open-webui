@@ -13,22 +13,32 @@
 
 	import { createNewFeedback, getFeedbackById, updateFeedbackById } from '$lib/apis/evaluations';
 	import { getChatById } from '$lib/apis/chats';
-	import { generateTags } from '$lib/apis';
+        import { generateTags, generateTitle } from '$lib/apis';
+        import { createNewNote } from '$lib/apis/notes';
 
-	import { config, models, settings, temporaryChatEnabled, TTSWorker, user } from '$lib/stores';
+	import {
+		audioQueue,
+		config,
+		models,
+		settings,
+		temporaryChatEnabled,
+		TTSWorker,
+		user
+	} from '$lib/stores';
 	import { synthesizeOpenAISpeech } from '$lib/apis/audio';
 	import { imageGenerations } from '$lib/apis/images';
-	import {
-		copyToClipboard as _copyToClipboard,
-		approximateToHumanReadable,
-		getMessageContentParts,
-		sanitizeResponseContent,
-		createMessagesList,
+        import {
+                copyToClipboard as _copyToClipboard,
+                approximateToHumanReadable,
+                getMessageContentParts,
+                sanitizeResponseContent,
+                createMessagesList,
 		formatDate,
 		removeDetails,
 		removeAllDetails
 	} from '$lib/utils';
-	import { WEBUI_BASE_URL } from '$lib/constants';
+        import { WEBUI_BASE_URL } from '$lib/constants';
+        import { marked } from 'marked';
 
 	import Name from './Name.svelte';
 	import ProfileImage from './ProfileImage.svelte';
@@ -38,16 +48,17 @@
 	import RateComment from './RateComment.svelte';
 	import Spinner from '$lib/components/common/Spinner.svelte';
 	import WebSearchResults from './ResponseMessage/WebSearchResults.svelte';
-	import Sparkles from '$lib/components/icons/Sparkles.svelte';
+        import Sparkles from '$lib/components/icons/Sparkles.svelte';
+        import NoteIcon from '$lib/components/icons/Note.svelte';
 
-	import DeleteConfirmDialog from '$lib/components/common/ConfirmDialog.svelte';
+        import DeleteConfirmDialog from '$lib/components/common/ConfirmDialog.svelte';
 
 	import Error from './Error.svelte';
 	import Citations from './Citations.svelte';
 	import CodeExecutions from './CodeExecutions.svelte';
 	import ContentRenderer from './ContentRenderer.svelte';
-	import { KokoroWorker } from '$lib/workers/KokoroWorker';
-	import FileItem from '$lib/components/common/FileItem.svelte';
+        import { KokoroWorker } from '$lib/workers/KokoroWorker';
+        import FileItem from '$lib/components/common/FileItem.svelte';
 	import FollowUps from './ResponseMessage/FollowUps.svelte';
 	import { fade } from 'svelte/transition';
 	import { flyAndScale } from '$lib/utils/transitions';
@@ -160,7 +171,6 @@
 
 	let messageIndexEdit = false;
 
-	let audioParts: Record<number, HTMLAudioElement | null> = {};
 	let speaking = false;
 	let speakingIdx: number | undefined;
 
@@ -176,6 +186,30 @@
 
         const decodeValue = (value?: string) => {
                 if (!value) return value ?? '';
+	let loadingSpeech = false;
+	let generatingImage = false;
+
+        let showRateComment = false;
+        let savingToNotes = false;
+        let canSaveResponseToNotes = false;
+
+        const copyToClipboard = async (text) => {
+                text = removeAllDetails(text);
+
+                if (($config?.ui?.response_watermark ?? '').trim() !== '') {
+                        text = `${text}\n\n${$config?.ui?.response_watermark}`;
+                }
+
+                const res = await _copyToClipboard(text, null, $settings?.copyFormatted ?? false);
+                if (res) {
+                        toast.success($i18n.t('Copying to clipboard was successful!'));
+                }
+        };
+
+        const decodeCitationName = (value: string) => {
+                if (typeof value !== 'string') {
+                        return '';
+                }
 
                 try {
                         return decodeURIComponent(value);
@@ -358,6 +392,198 @@
 		return new Promise<void>((res) => {
 			speakingIdx = idx;
 			const audio = audioParts[idx];
+                const acc: { id: string; title: string; url?: string }[] = [];
+
+                if (!Array.isArray(sources)) {
+                        return acc;
+                }
+
+                for (const source of sources) {
+                        if (!source || typeof source !== 'object') {
+                                continue;
+                        }
+
+                        const documents = Array.isArray(source?.document) ? source.document : [];
+
+                        for (let index = 0; index < documents.length; index += 1) {
+                                const metadataCollection = source?.metadata;
+                                const metadata = Array.isArray(metadataCollection)
+                                        ? metadataCollection[index]
+                                        : metadataCollection?.[index];
+
+                                let id = metadata?.source ?? source?.source?.id ?? `source-${acc.length + 1}`;
+
+                                let url =
+                                        metadata?.url ??
+                                        source?.source?.url ??
+                                        (typeof metadata?.source === 'string' &&
+                                        (metadata.source.startsWith('http://') || metadata.source.startsWith('https://'))
+                                                ? metadata.source
+                                                : undefined);
+
+                                if (typeof id === 'string' && (id.startsWith('http://') || id.startsWith('https://'))) {
+                                        url = id;
+                                }
+
+                                const name =
+                                        metadata?.name ??
+                                        source?.source?.name ??
+                                        (typeof url === 'string' ? url : `Source ${acc.length + 1}`);
+
+                                if (!acc.some((item) => item.id === id)) {
+                                        acc.push({
+                                                id: String(id),
+                                                title: decodeCitationName(String(name)),
+                                                url: typeof url === 'string' ? url : undefined
+                                        });
+                                }
+                        }
+                }
+
+                return acc;
+        };
+
+        const injectCitationLinks = (content: string, citations: { title: string; url?: string }[]) => {
+                if (typeof content !== 'string' || !citations?.length) {
+                        return content;
+                }
+
+                return content.replace(/\[(\d+)\]/g, (match, group) => {
+                        const citation = citations[Number(group) - 1];
+                        if (!citation) {
+                                return match;
+                        }
+
+                        if (citation.url) {
+                                return `[${citation.title}](${citation.url})`;
+                        }
+
+                        return citation.title;
+                });
+        };
+
+        const fallbackTitleFromContent = (content: string) => {
+                const fallbackLine = content
+                        .split('\n')
+                        .map((line) => line.trim())
+                        .find((line) => line.length > 0);
+
+                if (!fallbackLine) {
+                        return dayjs(message?.timestamp ?? Date.now()).format('YYYY-MM-DD');
+                }
+
+                const cleaned = fallbackLine.replace(/^#{1,6}\s*/, '').replace(/[`*_#]/g, '').trim();
+
+                if (cleaned.length === 0) {
+                        return dayjs(message?.timestamp ?? Date.now()).format('YYYY-MM-DD');
+                }
+
+                return cleaned.length > 60 ? `${cleaned.slice(0, 57)}…` : cleaned;
+        };
+
+        const saveResponseToNotes = async () => {
+                if (savingToNotes || !message?.content) {
+                        return;
+                }
+
+                if (typeof localStorage === 'undefined' || !localStorage.token) {
+                        toast.error($i18n.t('Unable to save response to notes.'));
+                        return;
+                }
+
+                savingToNotes = true;
+
+                try {
+                        const citationSources = extractCitationSources(message?.sources ?? message?.citations ?? []);
+                        const rawContent = removeAllDetails(message.content ?? '');
+                        const contentWithLinks = injectCitationLinks(rawContent, citationSources);
+                        const markdownContent = contentWithLinks.trim();
+
+                        if (!markdownContent) {
+                                throw new Error('empty-content');
+                        }
+
+                        const primarySelectedModel = Array.isArray(selectedModels)
+                                ? selectedModels[0]
+                                : null;
+                        const fallbackModelId =
+                                typeof primarySelectedModel === 'string'
+                                        ? primarySelectedModel
+                                        : primarySelectedModel?.id ?? '';
+
+                        const titleModelId = (model?.id ?? message.model ?? fallbackModelId ?? '') as string;
+                        let noteTitle = '';
+
+                        if (titleModelId) {
+                                const titleMessages = createMessagesList(history, message.id)
+                                        .filter((chatMessage) =>
+                                                ['system', 'user', 'assistant'].includes(chatMessage?.role)
+                                        )
+                                        .map((chatMessage) => ({
+                                                role: chatMessage.role,
+                                                content: removeAllDetails(chatMessage?.content ?? '')
+                                        }));
+
+                                const generatedTitle =
+                                        titleMessages.length > 0
+                                                ? await generateTitle(
+                                                          localStorage.token,
+                                                          titleModelId,
+                                                          titleMessages,
+                                                          chatId
+                                                  ).catch((error) => {
+                                                          console.error(error);
+                                                          return null;
+                                                  })
+                                                : null;
+
+                                if (generatedTitle) {
+                                        noteTitle = generatedTitle;
+                                }
+                        }
+
+                        if (!noteTitle) {
+                                noteTitle = fallbackTitleFromContent(markdownContent);
+                        }
+
+                        const htmlContent = marked.parse(markdownContent);
+
+                        await createNewNote(localStorage.token, {
+                                title: noteTitle,
+                                data: {
+                                        content: {
+                                                json: null,
+                                                md: markdownContent,
+                                                html: htmlContent
+                                        }
+                                },
+                                meta: null,
+                                access_control: {}
+                        });
+
+                        toast.success($i18n.t('Response saved to notes.'));
+                } catch (error) {
+                        console.error(error);
+                        toast.error($i18n.t('Unable to save response to notes.'));
+                } finally {
+                        savingToNotes = false;
+                }
+        };
+
+        $:
+                canSaveResponseToNotes =
+                        !edit &&
+                        !readOnly &&
+                        (message?.done ?? false) &&
+                        ($config?.features?.enable_notes ?? false) &&
+                        ($config?.features?.enable_save_response_to_notes ?? false) &&
+                        ($settings?.showSaveResponseToNotesButton ?? true) &&
+                        ($user?.role === 'admin' || ($user?.permissions?.features?.notes ?? true));
+
+        const playAudio = (idx: number) => {
+                return new Promise<void>((res) => {
+                        speakingIdx = idx;
+                        const audio = audioParts[idx];
 
 			if (!audio) {
 				return res();
@@ -375,30 +601,40 @@
 			};
 		});
 	};
+	let showRateComment = false;
 
-	const toggleSpeakMessage = async () => {
-		if (speaking) {
-			try {
-				speechSynthesis.cancel();
+	const copyToClipboard = async (text) => {
+		text = removeAllDetails(text);
 
-				if (speakingIdx !== undefined && audioParts[speakingIdx]) {
-					audioParts[speakingIdx]!.pause();
-					audioParts[speakingIdx]!.currentTime = 0;
-				}
-			} catch {}
-
-			speaking = false;
-			speakingIdx = undefined;
-			return;
+		if (($config?.ui?.response_watermark ?? '').trim() !== '') {
+			text = `${text}\n\n${$config?.ui?.response_watermark}`;
 		}
 
+		const res = await _copyToClipboard(text, null, $settings?.copyFormatted ?? false);
+		if (res) {
+			toast.success($i18n.t('Copying to clipboard was successful!'));
+		}
+	};
+
+	const stopAudio = () => {
+		try {
+			speechSynthesis.cancel();
+			$audioQueue.stop();
+		} catch {}
+
+		if (speaking) {
+			speaking = false;
+			speakingIdx = undefined;
+		}
+	};
+
+	const speak = async () => {
 		if (!(message?.content ?? '').trim().length) {
 			toast.info($i18n.t('No content to speak'));
 			return;
 		}
 
 		speaking = true;
-
 		const content = removeAllDetails(message.content);
 
 		if ($config.audio.tts.engine === '') {
@@ -417,12 +653,12 @@
 
 					console.log(voice);
 
-					const speak = new SpeechSynthesisUtterance(content);
-					speak.rate = $settings.audio?.tts?.playbackRate ?? 1;
+					const speech = new SpeechSynthesisUtterance(content);
+					speech.rate = $settings.audio?.tts?.playbackRate ?? 1;
 
-					console.log(speak);
+					console.log(speech);
 
-					speak.onend = () => {
+					speech.onend = () => {
 						speaking = false;
 						if ($settings.conversationMode) {
 							document.getElementById('voice-input-button')?.click();
@@ -430,15 +666,21 @@
 					};
 
 					if (voice) {
-						speak.voice = voice;
+						speech.voice = voice;
 					}
 
-					speechSynthesis.speak(speak);
+					speechSynthesis.speak(speech);
 				}
 			}, 100);
 		} else {
-			loadingSpeech = true;
+			$audioQueue.setId(`${message.id}`);
+			$audioQueue.setPlaybackRate($settings.audio?.tts?.playbackRate ?? 1);
+			$audioQueue.onStopped = () => {
+				speaking = false;
+				speakingIdx = undefined;
+			};
 
+			loadingSpeech = true;
 			const messageContentParts: string[] = getMessageContentParts(
 				content,
 				$config?.audio?.tts?.split_on ?? 'punctuation'
@@ -454,17 +696,6 @@
 			}
 
 			console.debug('Prepared message content for TTS', messageContentParts);
-
-			audioParts = messageContentParts.reduce(
-				(acc, _sentence, idx) => {
-					acc[idx] = null;
-					return acc;
-				},
-				{} as typeof audioParts
-			);
-
-			let lastPlayedAudioPromise = Promise.resolve(); // Initialize a promise that resolves immediately
-
 			if ($settings.audio?.tts?.engine === 'browser-kokoro') {
 				if (!$TTSWorker) {
 					await TTSWorker.set(
@@ -491,12 +722,9 @@
 						});
 
 					if (blob) {
-						const audio = new Audio(blob);
-						audio.playbackRate = $settings.audio?.tts?.playbackRate ?? 1;
-
-						audioParts[idx] = audio;
+						const url = URL.createObjectURL(blob);
+						$audioQueue.enqueue(url);
 						loadingSpeech = false;
-						lastPlayedAudioPromise = lastPlayedAudioPromise.then(() => playAudio(idx));
 					}
 				}
 			} else {
@@ -517,13 +745,10 @@
 
 					if (res) {
 						const blob = await res.blob();
-						const blobUrl = URL.createObjectURL(blob);
-						const audio = new Audio(blobUrl);
-						audio.playbackRate = $settings.audio?.tts?.playbackRate ?? 1;
+						const url = URL.createObjectURL(blob);
 
-						audioParts[idx] = audio;
+						$audioQueue.enqueue(url);
 						loadingSpeech = false;
-						lastPlayedAudioPromise = lastPlayedAudioPromise.then(() => playAudio(idx));
 					}
 				}
 			}
@@ -796,7 +1021,7 @@
 		<div class="flex-auto w-0 pl-1 relative">
 			<Name>
 				<Tooltip content={model?.name ?? message.model} placement="top-start">
-					<span class="line-clamp-1 text-black dark:text-white">
+					<span id="response-message-model-name" class="line-clamp-1 text-black dark:text-white">
 						{model?.name ?? message.model}
 					</span>
 				</Tooltip>
@@ -824,10 +1049,7 @@
 				<div class="chat-{message.role} w-full min-w-full markdown-prose">
 					<div>
 						{#if model?.info?.meta?.capabilities?.status_updates ?? true}
-							<StatusHistory
-								statusHistory={message?.statusHistory}
-								expand={message?.content === ''}
-							/>
+							<StatusHistory statusHistory={message?.statusHistory} />
 						{/if}
 
 						{#if message?.files && message.files?.filter((f) => f.type === 'image').length > 0}
@@ -1134,15 +1356,55 @@
 													/>
 												</svg>
 											</button>
-										</Tooltip>
-									{/if}
-								{/if}
+                                                                                </Tooltip>
+                                                                        {/if}
+                                                                {/if}
 
-								<Tooltip content={$i18n.t('Copy')} placement="bottom">
-									<button
-										aria-label={$i18n.t('Copy')}
-										class="{isLastMessage || ($settings?.highContrastMode ?? false)
-											? 'visible'
+                                                                {#if canSaveResponseToNotes}
+                                                                        <Tooltip content={$i18n.t('Save to Notes')} placement="bottom">
+                                                                                <button
+                                                                                        aria-label={$i18n.t('Save to Notes')}
+                                                                                        class="{isLastMessage || ($settings?.highContrastMode ?? false)
+                                                                                                ? 'visible'
+                                                                                                : 'invisible group-hover:visible'} p-1.5 hover:bg-black/5 dark:hover:bg-white/5 rounded-lg dark:hover:text-white hover:text-black transition disabled:opacity-60"
+                                                                                        on:click={() => {
+                                                                                                saveResponseToNotes();
+                                                                                        }}
+                                                                                        disabled={savingToNotes}
+                                                                                >
+                                                                                        {#if savingToNotes}
+                                                                                                <svg
+                                                                                                        class="w-4 h-4 animate-spin"
+                                                                                                        viewBox="0 0 24 24"
+                                                                                                        fill="none"
+                                                                                                        xmlns="http://www.w3.org/2000/svg"
+                                                                                                >
+                                                                                                        <circle
+                                                                                                                class="opacity-25"
+                                                                                                                cx="12"
+                                                                                                                cy="12"
+                                                                                                                r="10"
+                                                                                                                stroke="currentColor"
+                                                                                                                stroke-width="4"
+                                                                                                        />
+                                                                                                        <path
+                                                                                                                class="opacity-75"
+                                                                                                                fill="currentColor"
+                                                                                                                d="M4 12a8 8 0 0 1 8-8v4a4 4 0 0 0-4 4H4Z"
+                                                                                                        />
+                                                                                                </svg>
+                                                                                        {:else}
+                                                                                                <NoteIcon class="w-4 h-4" />
+                                                                                        {/if}
+                                                                                </button>
+                                                                        </Tooltip>
+                                                                {/if}
+
+                                                                <Tooltip content={$i18n.t('Copy')} placement="bottom">
+                                                                        <button
+                                                                                aria-label={$i18n.t('Copy')}
+                                                                                class="{isLastMessage || ($settings?.highContrastMode ?? false)
+                                                                                        ? 'visible'
 											: 'invisible group-hover:visible'} p-1.5 hover:bg-black/5 dark:hover:bg-white/5 rounded-lg dark:hover:text-white hover:text-black transition copy-response-button"
 										on:click={() => {
 											copyToClipboard(message.content);
@@ -1176,7 +1438,11 @@
 												: 'invisible group-hover:visible'} p-1.5 hover:bg-black/5 dark:hover:bg-white/5 rounded-lg dark:hover:text-white hover:text-black transition"
 											on:click={() => {
 												if (!loadingSpeech) {
-													toggleSpeakMessage();
+													if (speaking) {
+														stopAudio();
+													} else {
+														speak();
+													}
 												}
 											}}
 										>
