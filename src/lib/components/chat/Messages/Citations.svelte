@@ -20,15 +20,50 @@
 
 	let selectedCitation: any = null;
 
-	export const showSourceModal = (sourceIdx) => {
-		if (citations[sourceIdx]) {
-			console.log('Showing citation modal for:', citations[sourceIdx]);
+        const isHttpUrl = (value?: string) => {
+                if (!value) return false;
+                return /^https?:\/\//i.test(value);
+        };
 
-			if (citations[sourceIdx]?.source?.embed_url) {
-				const embedUrl = citations[sourceIdx].source.embed_url;
-				if (embedUrl) {
-					if (readOnly) {
-						// Open in new tab if readOnly
+        const resolveCitationUrl = (citation: any) => {
+                if (!citation) {
+                        return null;
+                }
+
+                const candidates: (string | undefined)[] = [
+                        citation?.source?.url,
+                        ...(citation?.metadata ?? []).map((meta) => meta?.url),
+                        citation?.source?.name
+                ];
+
+                const url = candidates.find((value) => isHttpUrl(value ?? ''));
+                return url ?? null;
+        };
+
+        const getFaviconDomain = (citation: any) => {
+                const url = resolveCitationUrl(citation);
+
+                if (!url) {
+                        return '';
+                }
+
+                try {
+                        const parsed = new URL(url);
+                        return parsed.hostname;
+                } catch (error) {
+                        return url;
+                }
+        };
+
+        export const showSourceModal = (sourceIdx) => {
+                if (citations[sourceIdx]) {
+                        console.log('Showing citation modal for:', citations[sourceIdx]);
+
+                        if (citations[sourceIdx]?.source?.embed_url) {
+                                const embedUrl = citations[sourceIdx].source.embed_url;
+                                if (embedUrl) {
+                                        if (readOnly) {
+                                                // Open in new tab if readOnly
 						window.open(embedUrl, '_blank');
 						return;
 					} else {
@@ -138,22 +173,22 @@
 />
 
 {#if citations.length > 0}
-	{@const urlCitations = citations.filter((c) => c?.source?.name?.startsWith('http'))}
-	<div class=" py-1 -mx-0.5 w-full flex gap-1 items-center flex-wrap">
-		<button
-			class="text-xs font-medium text-gray-600 dark:text-gray-300 px-3.5 h-8 rounded-full hover:bg-gray-100 dark:hover:bg-gray-800 transition flex items-center gap-1 border border-gray-50 dark:border-gray-850"
-			on:click={() => {
-				showCitations = !showCitations;
-			}}
-		>
-			{#if urlCitations.length > 0}
-				<div class="flex -space-x-1 items-center">
-					{#each urlCitations.slice(0, 3) as citation, idx}
-						<img
-							src="https://www.google.com/s2/favicons?sz=32&domain={citation.source.name}"
-							alt="favicon"
-							class="size-4 rounded-full shrink-0 border border-white dark:border-gray-850 bg-white dark:bg-gray-900"
-						/>
+        {@const urlCitations = citations.filter((citation) => resolveCitationUrl(citation))}
+        <div class=" py-1 -mx-0.5 w-full flex gap-1 items-center flex-wrap">
+                <button
+                        class="text-xs font-medium text-gray-600 dark:text-gray-300 px-3.5 h-8 rounded-full hover:bg-gray-100 dark:hover:bg-gray-800 transition flex items-center gap-1 border border-gray-50 dark:border-gray-850"
+                        on:click={() => {
+                                showCitations = !showCitations;
+                        }}
+                >
+                        {#if urlCitations.length > 0}
+                                <div class="flex -space-x-1 items-center">
+                                        {#each urlCitations.slice(0, 3) as citation, idx}
+                                                <img
+                                                        src={`https://www.google.com/s2/favicons?sz=32&domain=${getFaviconDomain(citation)}`}
+                                                        alt="favicon"
+                                                        class="size-4 rounded-full shrink-0 border border-white dark:border-gray-850 bg-white dark:bg-gray-900"
+                                                />
 					{/each}
 				</div>
 			{/if}
