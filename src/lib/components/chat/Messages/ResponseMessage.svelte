@@ -78,7 +78,9 @@
 		};
 		done: boolean;
 		error?: boolean | { content: string };
-		sources?: string[];
+                sources?: any[];
+                citations?: any[];
+                noteContent?: string;
 		code_executions?: {
 			uuid: string;
 			name: string;
@@ -147,8 +149,10 @@
 	let buttonsContainerElement: HTMLDivElement;
 	let showDeleteConfirm = false;
 
-	let model = null;
-	$: model = $models.find((m) => m.id === message.model);
+        let model = null;
+        $: model = $models.find((m) => m.id === message.model);
+
+        $: citationSources = extractCitationSources(message?.sources ?? message?.citations ?? []);
 
 	let edit = false;
 	let editedContent = '';
@@ -160,13 +164,185 @@
 	let speaking = false;
 	let speakingIdx: number | undefined;
 
-	let loadingSpeech = false;
-	let generatingImage = false;
+        let loadingSpeech = false;
+        let generatingImage = false;
 
-	let showRateComment = false;
+        let showRateComment = false;
 
-	const copyToClipboard = async (text) => {
-		text = removeAllDetails(text);
+        const isHttpUrl = (value?: string) => {
+                if (!value) return false;
+                return /^https?:\/\//i.test(value);
+        };
+
+        const decodeValue = (value?: string) => {
+                if (!value) return value ?? '';
+
+                try {
+                        return decodeURIComponent(value);
+                } catch (error) {
+                        return value;
+                }
+        };
+
+        const extractCitationSources = (sources: any[] = []) => {
+                let fallbackId = 1;
+                const occurrenceMap = new Map<string, number>();
+
+                return sources.reduce((acc, source) => {
+                        if (!source || Object.keys(source ?? {}).length === 0) {
+                                return acc;
+                        }
+
+                        if (source?.__extracted) {
+                                acc.push(source);
+                                return acc;
+                        }
+
+                        const documents: any[] = Array.isArray(source?.document) ? source.document : [];
+
+                        documents.forEach((document, index) => {
+                                const metadata = Array.isArray(source?.metadata)
+                                        ? source.metadata?.[index]
+                                        : undefined;
+                                const distance = Array.isArray(source?.distances)
+                                        ? source.distances?.[index]
+                                        : undefined;
+
+                                const baseId = metadata?.source ?? source?.source?.id ?? 'N/A';
+                                const occurrence = (occurrenceMap.get(baseId) ?? 0) + 1;
+                                occurrenceMap.set(baseId, occurrence);
+
+                                const uniqueId =
+                                        baseId !== 'N/A'
+                                                ? `${baseId}-${occurrence}`
+                                                : `source-${fallbackId++}`;
+
+                                let normalizedSource = source?.source ? { ...source.source } : {};
+
+                                if (metadata?.name) {
+                                        normalizedSource = {
+                                                ...normalizedSource,
+                                                name: metadata.name
+                                        };
+                                }
+
+                                const metadataUrl =
+                                        metadata?.url ??
+                                        (typeof metadata?.source === 'string' && isHttpUrl(metadata.source)
+                                                ? metadata.source
+                                                : undefined);
+
+                                if (metadataUrl) {
+                                        normalizedSource = {
+                                                ...normalizedSource,
+                                                url: metadataUrl
+                                        };
+                                }
+
+                                if (isHttpUrl(baseId)) {
+                                        normalizedSource = {
+                                                ...normalizedSource,
+                                                name: baseId,
+                                                url: normalizedSource?.url ?? baseId
+                                        };
+                                }
+
+                                acc.push({
+                                        id: uniqueId,
+                                        document: [document],
+                                        metadata: metadata ? [metadata] : [],
+                                        distances: distance !== undefined ? [distance] : undefined,
+                                        source: normalizedSource,
+                                        __extracted: true
+                                });
+                        });
+
+                        return acc;
+                }, [] as any[]);
+        };
+
+        const injectCitationLinks = (content: string, sources: any[] = []) => {
+                if (!content || sources.length === 0) {
+                        return content;
+                }
+
+                const labels = sources.map((source) => {
+                        const metadata = Array.isArray(source?.metadata) ? source.metadata?.[0] : undefined;
+                        const sourceInfo = source?.source ?? {};
+
+                        const rawTitle =
+                                metadata?.name ??
+                                sourceInfo?.name ??
+                                (typeof metadata?.source === 'string' ? metadata.source : undefined) ??
+                                'N/A';
+
+                        const decodedTitle = decodeValue(rawTitle);
+
+                        const urlCandidate =
+                                metadata?.url ??
+                                (typeof metadata?.source === 'string' && isHttpUrl(metadata.source)
+                                        ? metadata.source
+                                        : undefined) ??
+                                sourceInfo?.url;
+
+                        if (urlCandidate && isHttpUrl(urlCandidate)) {
+                                return `[${decodedTitle}](${urlCandidate})`;
+                        }
+
+                        return decodedTitle;
+                });
+
+                const citationPattern = /\[(\d+(?:\s*,\s*\d+)*)\]/g;
+
+                return content.replace(citationPattern, (match, group) => {
+                        const indices = group
+                                .split(',')
+                                .map((value) => parseInt(value.trim(), 10))
+                                .filter((value) => !isNaN(value) && value > 0);
+
+                        if (indices.length === 0) {
+                                return match;
+                        }
+
+                        const replacements = indices.map((index) => labels[index - 1]).filter(Boolean);
+
+                        if (replacements.length !== indices.length) {
+                                return match;
+                        }
+
+                        return replacements.join(', ');
+                });
+        };
+
+        let citationSources: any[] = [];
+
+        const buildCitationMetadata = (baseMessage: Partial<MessageType>) => {
+                const sources = extractCitationSources(baseMessage?.sources ?? baseMessage?.citations ?? []);
+
+                const contentWithLinks = injectCitationLinks(
+                        sanitizeResponseContent(baseMessage?.content ?? ''),
+                        sources
+                );
+
+                return {
+                        citations: sources,
+                        noteContent: contentWithLinks
+                };
+        };
+
+        const persistMessage = (messageId: string, updatedMessage: Partial<MessageType>) => {
+                const baseMessage = updatedMessage ?? history?.messages?.[messageId] ?? {};
+
+                const normalizedMessage = {
+                        ...baseMessage,
+                        ...buildCitationMetadata(baseMessage)
+                };
+
+                saveMessage(messageId, normalizedMessage);
+        };
+
+        const copyToClipboard = async (text) => {
+                text = removeAllDetails(text);
 
 		if (($config?.ui?.response_watermark ?? '').trim() !== '') {
 			text = `${text}\n\n${$config?.ui?.response_watermark}`;
@@ -432,10 +608,10 @@
 				url: `${image.url}`
 			}));
 
-			saveMessage(message.id, {
-				...message,
-				files: files
-			});
+                        persistMessage(message.id, {
+                                ...message,
+                                files: files
+                        });
 		}
 
 		generatingImage = false;
@@ -525,7 +701,7 @@
 		}
 
 		console.log(updatedMessage);
-		saveMessage(message.id, updatedMessage);
+                persistMessage(message.id, updatedMessage);
 
 		await tick();
 
@@ -546,7 +722,7 @@
 					updatedMessage.annotation.tags = tags;
 					feedbackItem.data.tags = tags;
 
-					saveMessage(message.id, updatedMessage);
+                                    persistMessage(message.id, updatedMessage);
 					await updateFeedbackById(
 						localStorage.token,
 						updatedMessage.feedbackId,
@@ -608,11 +784,11 @@
 		dir={$settings.chatDirection}
 	>
 		<div class={`shrink-0 ltr:mr-3 rtl:ml-3 hidden @lg:flex mt-1 `}>
-			<ProfileImage
-				src={model?.info?.meta?.profile_image_url ??
-					($i18n.language === 'dg-DG'
-						? `${WEBUI_BASE_URL}/doge.png`
-						: `${WEBUI_BASE_URL}/favicon.png`)}
+                        <ProfileImage
+                                src={model?.info?.meta?.profile_image_url ??
+                                        ($i18n.language === 'dg-DG'
+                                                ? `${WEBUI_BASE_URL}/static/doge.png`
+                                                : `${WEBUI_BASE_URL}/static/favicon.png`)}
 				className={'size-8 assistant-message-profile-image'}
 			/>
 		</div>
@@ -765,7 +941,7 @@
 										{history}
 										{selectedModels}
 										content={message.content}
-										sources={message.sources}
+                                                                                sources={citationSources}
 										floatingButtons={message?.done &&
 											!readOnly &&
 											($settings?.showFloatingActionButtons ?? true)}
@@ -790,13 +966,18 @@
 										onAddMessages={({ modelId, parentId, messages }) => {
 											addMessages({ modelId, parentId, messages });
 										}}
-										onSave={({ raw, oldContent, newContent }) => {
-											history.messages[message.id].content = history.messages[
-												message.id
-											].content.replace(raw, raw.replace(oldContent, newContent));
+                                                                                onSave={({ raw, oldContent, newContent }) => {
+                                                                                        const currentMessage = history.messages[message.id];
+                                                                                        const updatedContent = currentMessage.content.replace(
+                                                                                                raw,
+                                                                                                raw.replace(oldContent, newContent)
+                                                                                        );
 
-											updateChat();
-										}}
+                                                                                        persistMessage(message.id, {
+                                                                                                ...currentMessage,
+                                                                                                content: updatedContent
+                                                                                        });
+                                                                                }}
 									/>
 								{/if}
 
@@ -805,12 +986,12 @@
 								{/if}
 
 								{#if (message?.sources || message?.citations) && (model?.info?.meta?.capabilities?.citations ?? true)}
-									<Citations
-										bind:this={citationsElement}
-										id={message?.id}
-										sources={message?.sources ?? message?.citations}
-										{readOnly}
-									/>
+                                                                        <Citations
+                                                                                bind:this={citationsElement}
+                                                                                id={message?.id}
+                                                                                sources={citationSources}
+                                                                                {readOnly}
+                                                                        />
 								{/if}
 
 								{#if message.code_executions}
